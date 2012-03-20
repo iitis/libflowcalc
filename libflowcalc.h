@@ -9,21 +9,26 @@ extern "C" {
 #endif
 
 struct lfc;
+struct lfc_plugin;
+struct lfc_flow;
+struct lfc_ext;
 
 /****************************************************************************/
 
 /** A per-packet callback function
  * @param ts     packet timestamp
- * @param dir    packet direction: 0 (client-to-server) or 1 (server-to-client)
+ * @param up     if true, this packet flows in the same direction as the
+ *               the first packet that created the flow
  * @param pkt    libtrace packet - access to packet data
  * @param data   flow data
  */
-typedef void (*pkt_cb)(struct lfc *lfc, double ts, int dir, libtrace_packet_t *pkt, void *data);
+typedef void (*pkt_cb)(struct lfc *lfc, double ts, bool up, libtrace_packet_t *pkt, void *data);
 
 /** A callback to call when a flow is closed
+ * @param lf     basic flow information
  * @param data   flow data
  */
-typedef void (*flow_cb)(struct lfc *lfc, void *data);
+typedef void (*flow_cb)(struct lfc *lfc, struct lfc_flow *lf, void *data);
 
 /****************************************************************************/
 
@@ -41,6 +46,29 @@ struct lfc_plugin {
 
 	pkt_cb  pktcb;       /**> packet callback function */
 	flow_cb flowcb;      /**> flow callback function */
+};
+
+/** Flow data */
+struct lfc_flow {
+	double ts;                     /**> packet timestamp */
+
+	bool is_ip6;                   /**> is IPv6? */
+	uint16_t proto;                /**> transport protocol */
+
+	struct lfc_flow_addr {
+		union {
+			struct in_addr ip4;
+			struct in6_addr ip6;
+		} addr;
+		uint16_t port;             /**> transport protocol port number */
+	} src;                         /**> source address */
+	struct lfc_flow_addr dst;      /**> destination address */
+};
+
+/** Represents libflowmanager extension data */
+struct lfc_ext {
+	struct lfc_flow init;          /**> information in first packet */
+	void *data;                    /**> plugin data */
 };
 
 /****************************************************************************/
