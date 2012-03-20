@@ -90,8 +90,10 @@ void lfc_register(struct lfc *lfc, const char *name, int datalen, pkt_cb pktcb, 
 /** Run libflowcalc for given libtrace URI and optional filter
  * @param uri      libtrace URI - see libtrace_create() documentation
  * @param filter   optional BPF filter string
+ * @retval true    success
+ * @retval false   failed
  */
-void lfc_run(struct lfc *lfc, const char *uri, const char *filter);
+bool lfc_run(struct lfc *lfc, const char *uri, const char *filter);
 
 #ifdef __cplusplus
 }

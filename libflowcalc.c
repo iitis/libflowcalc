@@ -236,6 +236,7 @@ struct lfc *lfc_init()
 
 void lfc_deinit(struct lfc *lfc)
 {
+	expire_flows(lfc, 0, true);
 	mmatic_destroy(lfc->mm);
 }
 
@@ -253,7 +254,7 @@ void lfc_register(struct lfc *lfc, const char *name, int datalen, pkt_cb pktcb, 
 	lfc->datalen_sum += datalen;
 }
 
-void lfc_run(struct lfc *lfc, const char *uri, const char *filterstring)
+bool lfc_run(struct lfc *lfc, const char *uri, const char *filterstring)
 {
 	libtrace_t *trace;
 	libtrace_packet_t *packet;
@@ -265,18 +266,22 @@ void lfc_run(struct lfc *lfc, const char *uri, const char *filterstring)
 	}
 
 	packet = trace_create_packet();
-	if (!packet)
-		die("TODO: Creating libtrace packet");
+	if (!packet) {
+		dbg(1, "error while creating libtrace packet\n");
+		return false;
+	}
 
 	/***/
 
 	trace = trace_create(uri);
-	if (!trace)
-		die("TODO: Creating libtrace trace");
+	if (!trace) {
+		dbg(1, "error while creating libtrace object\n");
+		return false;
+	}
 
 	if (trace_is_err(trace)) {
 		trace_perror(trace, "Opening trace file");
-		die("TODO");
+		return false;
 	}
 
 	if (filterstring) {
@@ -284,7 +289,7 @@ void lfc_run(struct lfc *lfc, const char *uri, const char *filterstring)
 
 		if (trace_config(trace, TRACE_OPTION_FILTER, filter) == -1) {
 			trace_perror(trace, "Configuring filter");
-			die("TODO");
+			return false;
 		}
 	}
 
@@ -292,7 +297,7 @@ void lfc_run(struct lfc *lfc, const char *uri, const char *filterstring)
 
 	if (trace_start(trace) == -1) {
 		trace_perror(trace, "Starting trace");
-		die("TODO");
+		return false;
 	}
 
 	while (trace_read_packet(trace, packet) > 0)
@@ -300,7 +305,7 @@ void lfc_run(struct lfc *lfc, const char *uri, const char *filterstring)
 
 	if (trace_is_err(trace)) {
 		trace_perror(trace, "Reading packets");
-		die("TODO");
+		return false;
 	}
 
 	trace_destroy(trace);

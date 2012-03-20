@@ -1,5 +1,5 @@
 .*.swp
 *.o
 *.so
-flowcalc
+example
 libflowcalc.so
