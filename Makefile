@@ -11,8 +11,7 @@ all: libflowcalc.so example
 libflowcalc.so: libflowcalc.c libflowcalc.h
 	g++ $(CPPLAGS) \
 		libflowcalc.c -o libflowcalc.so \
-		-shared -Wl,-soname,libflowcalc.so.0 \
-		-lpjf -lpcre -ltrace -lflowmanager
+		-shared -lpjf -lpcre -ltrace -lflowmanager
 
 example: example.c libflowcalc.so
 	gcc $(CFLAGS) -L. -lflowcalc -lpjf \

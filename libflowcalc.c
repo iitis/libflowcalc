@@ -31,7 +31,8 @@ static void expire_flows(struct lfc *lfc, double ts, bool force)
 
 		tlist_reset(lfc->plugins);
 		while (lp = (struct lfc_plugin *) tlist_iter(lfc->plugins)) {
-			lp->flowcb(lfc, (struct lfc_flow *) &(le->init), data);
+			if (lp->flowcb)
+				lp->flowcb(lfc, &le->lf, data);
 			data += lp->datalen;
 		}
 
@@ -147,14 +148,15 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 
 	if (is_new) {
 		le = (struct lfc_ext *) mmatic_zalloc(lfc->mm, sizeof(*le));
-		le->data = mmatic_zalloc(lfc->mm, lfc->datalen_sum);
+		if (lfc->datalen_sum)
+			le->data = mmatic_zalloc(lfc->mm, lfc->datalen_sum);
 		f->extension = le;
 
 		/*
 		 * record information on first packet
 		 */
-		lf = &le->init;
-		lf->ts = ts;
+		lf = &le->lf;
+		lf->ts_first = lf->ts_last = ts;
 
 		/* copy IP address */
 		if (ip6) {
@@ -175,7 +177,8 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 		up = true;
 	} else {
 		le = (struct lfc_ext *) f->extension;
-		lf = &le->init;
+		lf = &le->lf;
+		lf->ts_last = ts;
 
 		/*
 		 * NOTE: we make our own notion of "packet direction", different than in the libflowmanager. In
@@ -207,7 +210,8 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	data = le->data;
 	tlist_reset(lfc->plugins);
 	while (lp = (struct lfc_plugin *) tlist_iter(lfc->plugins)) {
-		lp->pktcb(lfc, ts, up, pkt, data);
+		if (lp->pktcb)
+			lp->pktcb(lfc, ts, up, pkt, data);
 		data += lp->datalen;
 	}
 
@@ -308,6 +312,10 @@ bool lfc_run(struct lfc *lfc, const char *uri, const char *filterstring)
 		return false;
 	}
 
+	expire_flows(lfc, 0, true);
+
 	trace_destroy(trace);
 	trace_destroy_packet(packet);
+
+	return true;
 }

@@ -50,7 +50,8 @@ struct lfc_plugin {
 
 /** Flow data */
 struct lfc_flow {
-	double ts;                     /**> packet timestamp */
+	double ts_first;               /**> first packet timestamp */
+	double ts_last;                /**> last packet timestamp */
 
 	bool is_ip6;                   /**> is IPv6? */
 	uint16_t proto;                /**> transport protocol */
@@ -67,7 +68,7 @@ struct lfc_flow {
 
 /** Represents libflowmanager extension data */
 struct lfc_ext {
-	struct lfc_flow init;          /**> information in first packet */
+	struct lfc_flow lf;            /**> basic flow information */
 	void *data;                    /**> plugin data */
 };
 

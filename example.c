@@ -41,7 +41,7 @@ void flow(struct lfc *lfc, struct lfc_flow *lf, void *data)
 {
 	struct flow *t = data;
 
-//	printf("# %.6f\n", lf->ts);
+//	printf("# %.6f\n", lf->ts_first);
 
 	if (lf->proto == IPPROTO_UDP)
 		printf("UDP ");
