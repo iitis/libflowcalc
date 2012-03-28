@@ -21,7 +21,7 @@ struct flow {
 	int bytes_down;
 };
 
-void pkt(struct lfc *lfc, double ts, bool up, libtrace_packet_t *pkt, void *data)
+void pkt(struct lfc *lfc, double ts, bool up, bool is_new, libtrace_packet_t *pkt, void *data)
 {
 	struct flow *t = data;
 	int len;

@@ -19,10 +19,11 @@ struct lfc_ext;
  * @param ts     packet timestamp
  * @param up     if true, this packet flows in the same direction as the
  *               the first packet that created the flow
+ * @param is_new true for first packet in flow
  * @param pkt    libtrace packet - access to packet data
  * @param data   flow data
  */
-typedef void (*pkt_cb)(struct lfc *lfc, double ts, bool up, libtrace_packet_t *pkt, void *data);
+typedef void (*pkt_cb)(struct lfc *lfc, double ts, bool up, bool is_new, libtrace_packet_t *pkt, void *data);
 
 /** A callback to call when a flow is closed
  * @param lf     basic flow information
