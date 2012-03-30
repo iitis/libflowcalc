@@ -17,15 +17,17 @@ struct lfc_ext;
 
 /** A per-packet callback function
  * @param pdata  plugin data
+ * @param lf     flow data
+ * @param data   plugin flow data
  * @param ts     packet timestamp
  * @param up     if true, this packet flows in the same direction as the
  *               the first packet that created the flow
  * @param is_new true for first packet in flow
  * @param pkt    libtrace packet - access to packet data
- * @param data   flow data
  */
 typedef void (*pkt_cb)(struct lfc *lfc, void *pdata,
-	double ts, bool up, bool is_new, libtrace_packet_t *pkt, void *data);
+	struct lfc_flow *lf, void *data,
+	double ts, bool up, bool is_new, libtrace_packet_t *pkt);
 
 /** A callback to call when a flow is closed
  * @param pdata  plugin data

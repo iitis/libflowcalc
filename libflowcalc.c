@@ -211,7 +211,7 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	tlist_reset(lfc->plugins);
 	while (lp = (struct lfc_plugin *) tlist_iter(lfc->plugins)) {
 		if (lp->pktcb)
-			lp->pktcb(lfc, lp->pdata, ts, up, is_new, pkt, data);
+			lp->pktcb(lfc, lp->pdata, lf, data, ts, up, is_new, pkt);
 		data += lp->datalen;
 	}
 
