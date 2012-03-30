@@ -21,7 +21,7 @@ struct flow {
 	int bytes_down;
 };
 
-void pkt(struct lfc *lfc, double ts, bool up, bool is_new, libtrace_packet_t *pkt, void *data)
+void pkt(struct lfc *lfc, void *pdata, double ts, bool up, bool is_new, libtrace_packet_t *pkt, void *data)
 {
 	struct flow *t = data;
 	int len;
@@ -37,7 +37,7 @@ void pkt(struct lfc *lfc, double ts, bool up, bool is_new, libtrace_packet_t *pk
 	}
 }
 
-void flow(struct lfc *lfc, struct lfc_flow *lf, void *data)
+void flow(struct lfc *lfc, void *pdata, struct lfc_flow *lf, void *data)
 {
 	struct flow *t = data;
 
@@ -70,7 +70,7 @@ int main(int argc, char *argv[])
 
 	lfc = lfc_init();
 
-	lfc_register(lfc, "example", sizeof(struct flow), pkt, flow);
+	lfc_register(lfc, "example", sizeof(struct flow), pkt, flow, NULL);
 	lfc_run(lfc, argv[1], argv[2]);
 
 	lfc_deinit(lfc);

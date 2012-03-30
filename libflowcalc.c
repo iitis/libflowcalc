@@ -32,7 +32,7 @@ static void expire_flows(struct lfc *lfc, double ts, bool force)
 		tlist_reset(lfc->plugins);
 		while (lp = (struct lfc_plugin *) tlist_iter(lfc->plugins)) {
 			if (lp->flowcb)
-				lp->flowcb(lfc, &le->lf, data);
+				lp->flowcb(lfc, lp->pdata, &le->lf, data);
 			data += lp->datalen;
 		}
 
@@ -211,7 +211,7 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	tlist_reset(lfc->plugins);
 	while (lp = (struct lfc_plugin *) tlist_iter(lfc->plugins)) {
 		if (lp->pktcb)
-			lp->pktcb(lfc, ts, up, is_new, pkt, data);
+			lp->pktcb(lfc, lp->pdata, ts, up, is_new, pkt, data);
 		data += lp->datalen;
 	}
 
@@ -244,7 +244,8 @@ void lfc_deinit(struct lfc *lfc)
 	mmatic_destroy(lfc->mm);
 }
 
-void lfc_register(struct lfc *lfc, const char *name, int datalen, pkt_cb pktcb, flow_cb flowcb)
+void lfc_register(struct lfc *lfc,
+	const char *name, int datalen, pkt_cb pktcb, flow_cb flowcb, void *pdata)
 {
 	struct lfc_plugin *lp;
 
@@ -253,6 +254,7 @@ void lfc_register(struct lfc *lfc, const char *name, int datalen, pkt_cb pktcb, 
 	lp->datalen = datalen;
 	lp->pktcb = pktcb;
 	lp->flowcb = flowcb;
+	lp->pdata = pdata;
 
 	tlist_push(lfc->plugins, lp);
 	lfc->datalen_sum += datalen;

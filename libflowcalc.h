@@ -16,6 +16,7 @@ struct lfc_ext;
 /****************************************************************************/
 
 /** A per-packet callback function
+ * @param pdata  plugin data
  * @param ts     packet timestamp
  * @param up     if true, this packet flows in the same direction as the
  *               the first packet that created the flow
@@ -23,13 +24,16 @@ struct lfc_ext;
  * @param pkt    libtrace packet - access to packet data
  * @param data   flow data
  */
-typedef void (*pkt_cb)(struct lfc *lfc, double ts, bool up, bool is_new, libtrace_packet_t *pkt, void *data);
+typedef void (*pkt_cb)(struct lfc *lfc, void *pdata,
+	double ts, bool up, bool is_new, libtrace_packet_t *pkt, void *data);
 
 /** A callback to call when a flow is closed
+ * @param pdata  plugin data
  * @param lf     basic flow information
  * @param data   flow data
  */
-typedef void (*flow_cb)(struct lfc *lfc, struct lfc_flow *lf, void *data);
+typedef void (*flow_cb)(struct lfc *lfc, void *pdata,
+	struct lfc_flow *lf, void *data);
 
 /****************************************************************************/
 
@@ -47,6 +51,7 @@ struct lfc_plugin {
 
 	pkt_cb  pktcb;       /**> packet callback function */
 	flow_cb flowcb;      /**> flow callback function */
+	void *pdata;         /**> plugin data */
 };
 
 /** Flow data */
@@ -86,8 +91,10 @@ void lfc_deinit(struct lfc *lfc);
  * @param datalen  require flow data size
  * @param pktcb    per-packet callback function
  * @param flowcb   flow-close callback function
+ * @param pdata    plugin data to pass to pkt_cb and flow_cb
  */
-void lfc_register(struct lfc *lfc, const char *name, int datalen, pkt_cb pktcb, flow_cb flowcb);
+void lfc_register(struct lfc *lfc,
+	const char *name, int datalen, pkt_cb pktcb, flow_cb flowcb, void *pdata);
 
 /** Run libflowcalc for given libtrace URI and optional filter
  * @param uri      libtrace URI - see libtrace_create() documentation
