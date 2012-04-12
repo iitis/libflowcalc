@@ -41,9 +41,10 @@ typedef void (*flow_cb)(struct lfc *lfc, void *pdata,
 
 /** Main libflowcalc data structure */
 struct lfc {
-	mmatic *mm;          /**> memory allocator */
-	tlist *plugins;      /**> list of struct lfc_plugin */
-	int datalen_sum;     /**> sum of plugins->datalen */
+	mmatic *mm;           /**> memory allocator */
+	tlist *plugins;       /**> list of struct lfc_plugin */
+	int datalen_sum;      /**> sum of plugins->datalen */
+	unsigned int last_id; /**> last assigned lfc_flow::id */
 };
 
 /** Represents attached plugin */
@@ -58,6 +59,7 @@ struct lfc_plugin {
 
 /** Flow data */
 struct lfc_flow {
+	unsigned int id;               /**> flow id - sequential number */
 	double ts_first;               /**> first packet timestamp */
 	double ts_last;                /**> last packet timestamp */
 
@@ -80,6 +82,11 @@ struct lfc_ext {
 	void *data;                    /**> plugin data */
 };
 
+/** libflowcalc options */
+enum lfc_option {
+	LFC_OPT_TCP_ANYSTART           /**> LFM_CONFIG_TCP_ANYSTART */
+};
+
 /****************************************************************************/
 
 /** Initialize libflowcalc */
@@ -87,6 +94,9 @@ struct lfc *lfc_init();
 
 /** Deinitialize libflowcalc */
 void lfc_deinit(struct lfc *lfc);
+
+/** Enable given libflowcalc option */
+void lfc_enable(struct lfc *lfc, enum lfc_option option);
 
 /** Register a plugin
  * @param name     plugin name

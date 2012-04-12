@@ -156,6 +156,7 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 		 * record information on first packet
 		 */
 		lf = &le->lf;
+		lf->id = ++lfc->last_id;
 		lf->ts_first = lf->ts_last = ts;
 
 		/* copy IP address */
@@ -242,6 +243,17 @@ void lfc_deinit(struct lfc *lfc)
 {
 	expire_flows(lfc, 0, true);
 	mmatic_destroy(lfc->mm);
+}
+
+void lfc_enable(struct lfc *lfc, enum lfc_option option)
+{
+	int one = 1;
+
+	switch (option) {
+		case LFC_OPT_TCP_ANYSTART:
+			lfm_set_config_option(LFM_CONFIG_TCP_ANYSTART, &one);
+			break;
+	}
 }
 
 void lfc_register(struct lfc *lfc,
