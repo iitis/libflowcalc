@@ -36,7 +36,8 @@ static void expire_flows(struct lfc *lfc, double ts, bool force)
 			data += lp->datalen;
 		}
 
-		mmatic_free(le->data);
+		if (lfc->datalen_sum)
+			mmatic_free(le->data);
 		mmatic_free(le);
 		delete(flow);
 	}
