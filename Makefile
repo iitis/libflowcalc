@@ -14,8 +14,9 @@ libflowcalc.so: libflowcalc.c libflowcalc.h
 		-shared -lpjf -lpcre -ltrace -lflowmanager
 
 example: example.c libflowcalc.so
-	gcc $(CFLAGS) -L. -lflowcalc -lpjf \
-		example.c -o example
+	gcc $(CFLAGS) \
+		example.c -o example \
+		-L. -lflowcalc -ltrace -lpjf
 
 install:
 	install -m 644 libflowcalc.h $(PKGDST)/include
