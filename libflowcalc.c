@@ -253,6 +253,7 @@ void lfc_enable(struct lfc *lfc, enum lfc_option option)
 
 	switch (option) {
 		case LFC_OPT_TCP_ANYSTART:
+			dbg(4, "enabling LFM_CONFIG_TCP_ANYSTART\n");
 			lfm_set_config_option(LFM_CONFIG_TCP_ANYSTART, &one);
 			break;
 		case LFC_OPT_TCP_WAIT:
