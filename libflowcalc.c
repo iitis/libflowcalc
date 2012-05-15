@@ -158,7 +158,7 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 		 */
 		lf = &le->lf;
 		lf->id = ++lfc->last_id;
-		lf->ts_first = lf->ts_last = ts;
+		lf->ts_first = ts;
 
 		/* copy IP address */
 		if (ip6) {
@@ -180,7 +180,6 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	} else {
 		le = (struct lfc_ext *) f->extension;
 		lf = &le->lf;
-		lf->ts_last = ts;
 
 		/*
 		 * NOTE: we make our own notion of "packet direction", different than in the libflowmanager. In
@@ -216,6 +215,8 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 			lp->pktcb(lfc, lp->pdata, lf, data, ts, up, is_new, pkt);
 		data += lp->datalen;
 	}
+
+	lf->ts_last = ts;
 
 	/*
 	 * flow maintenance
@@ -253,6 +254,9 @@ void lfc_enable(struct lfc *lfc, enum lfc_option option)
 	switch (option) {
 		case LFC_OPT_TCP_ANYSTART:
 			lfm_set_config_option(LFM_CONFIG_TCP_ANYSTART, &one);
+			break;
+		case LFC_OPT_TCP_WAIT:
+			lfm_set_config_option(LFM_CONFIG_TCP_TIMEWAIT, &one);
 			break;
 	}
 }

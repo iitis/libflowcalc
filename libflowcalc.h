@@ -82,9 +82,14 @@ struct lfc_ext {
 	void *data;                    /**> plugin data */
 };
 
-/** libflowcalc options */
+/** libflowcalc options
+ * Kind of code duplication, for two reasons:
+ *   1) the original header does not work cleanly in C
+ *   2) lfc_option may be a buffer for future changes in libflowmanager
+ */
 enum lfc_option {
-	LFC_OPT_TCP_ANYSTART           /**> LFM_CONFIG_TCP_ANYSTART */
+	LFC_OPT_TCP_ANYSTART = 1,           /**> LFM_CONFIG_TCP_ANYSTART */
+	LFC_OPT_TCP_WAIT,                   /**> LFM_CONFIG_TCP_TIMEWAIT */
 };
 
 /****************************************************************************/
