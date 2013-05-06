@@ -9,7 +9,7 @@ default: all
 all: libflowcalc.so example
 
 libflowcalc.so: libflowcalc.c libflowcalc.h
-	g++ $(CPPLAGS) \
+	g++ $(CPPFLAGS) \
 		libflowcalc.c -o libflowcalc.so \
 		-shared -lpjf -lpcre -ltrace -lflowmanager
 

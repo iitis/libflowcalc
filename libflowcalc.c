@@ -6,6 +6,11 @@
  * Licensed under GNU GPL v. 3
  *
  * Inspired by lpi_protoident.cc by Shane Alcock, et al.
+ *
+ * FIXME: handle the TCP_ANYSTART option better (@1): the case in which
+ *        is_new==1 for a TCP connection started by any packet is not
+ *        the same as the one started by the proper SYN/SYN+ACK/ACK triplet
+ *        e.g. the classification by first 5 packets would need this
  */
 
 #include <stdio.h>
@@ -30,7 +35,7 @@ static void expire_flows(struct lfc *lfc, double ts, bool force)
 		data = le->data;
 
 		tlist_reset(lfc->plugins);
-		while (lp = (struct lfc_plugin *) tlist_iter(lfc->plugins)) {
+		while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
 			if (lp->flowcb)
 				lp->flowcb(lfc, lp->pdata, &le->lf, data);
 			data += lp->datalen;
@@ -40,26 +45,6 @@ static void expire_flows(struct lfc *lfc, double ts, bool force)
 			mmatic_free(le->data);
 		mmatic_free(le);
 		delete(flow);
-	}
-}
-
-static int ip_get_direction(struct lfc *lfc, libtrace_packet_t *pkt)
-{
-	void *l3;
-	uint16_t ethtype;
-	uint32_t rem;
-	libtrace_ip_t *ip = NULL;
-	libtrace_ip6_t *ip6 = NULL;
-
-	l3 = trace_get_layer3(pkt, &ethtype, &rem);
-	if (ethtype == TRACE_ETHERTYPE_IP && rem >= sizeof *ip) {
-		ip = (libtrace_ip_t *) l3;
-		return (memcmp(&(ip->ip_src), &(ip->ip_dst), sizeof(ip->ip_src)) < 0);
-	} else if (ethtype == TRACE_ETHERTYPE_IPV6 && rem >= sizeof *ip6) {
-		ip6 = (libtrace_ip6_t *) l3;
-		return (memcmp(&(ip6->ip_src), &(ip6->ip_dst), sizeof(ip6->ip_src)) < 0);
-	} else {
-		return 0;
 	}
 }
 
@@ -135,7 +120,7 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	}
 
 	/*
-	 * get flow data
+	 * get flow data @1
 	 */
 	bool is_new = false;
 	Flow *f;
@@ -210,7 +195,7 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 
 	data = le->data;
 	tlist_reset(lfc->plugins);
-	while (lp = (struct lfc_plugin *) tlist_iter(lfc->plugins)) {
+	while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
 		if (lp->pktcb)
 			lp->pktcb(lfc, lp->pdata, lf, data, ts, up, is_new, pkt);
 		data += lp->datalen;
