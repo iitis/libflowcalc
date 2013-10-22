@@ -23,23 +23,35 @@
 
 #include "libflowcalc.h"
 
+static void flow_summarize(struct lfc *lfc, struct lfc_ext *le)
+{
+	struct lfc_plugin *lp;
+	void *ptr;
+
+	if (le->done) return;
+
+	ptr = le->data;
+	tlist_reset(lfc->plugins);
+
+	while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
+		if (lp->flowcb)
+			lp->flowcb(lfc, lp->pdata, &le->lf, ptr);
+
+		ptr += lp->datalen;
+	}
+
+	le->done = true;
+}
+
 static void expire_flows(struct lfc *lfc, double ts, bool force)
 {
 	Flow *flow;
-	struct lfc_plugin *lp;
 	struct lfc_ext *le;
-	void *data;
 
 	while ((flow = lfm_expire_next_flow(ts, force)) != NULL) {
 		le = (struct lfc_ext *) flow->extension;
-		data = le->data;
 
-		tlist_reset(lfc->plugins);
-		while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
-			if (lp->flowcb)
-				lp->flowcb(lfc, lp->pdata, &le->lf, data);
-			data += lp->datalen;
-		}
+		flow_summarize(lfc, le);
 
 		if (lfc->datalen_sum)
 			mmatic_free(le->data);
@@ -69,7 +81,9 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 
 	/* skip non-IP */
 	l3 = trace_get_layer3(pkt, &l3_proto, &rem);
-	if (l3_proto == TRACE_ETHERTYPE_IP && rem >= sizeof *ip4)
+	if (!l3)
+		return;
+	else if (l3_proto == TRACE_ETHERTYPE_IP && rem >= sizeof *ip4)
 		ip4 = (libtrace_ip_t *) l3;
 	else if (l3_proto == TRACE_ETHERTYPE_IPV6 && rem >= sizeof *ip6)
 		ip6 = (libtrace_ip6_t *) l3;
@@ -88,7 +102,9 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 
 	/* skip non-TCP/UDP */
 	l4 = trace_get_transport(pkt, &l4_proto, &rem);
-	if (l4_proto == TRACE_IPPROTO_TCP && rem >= sizeof(*tcp))
+	if (!l4)
+		return;
+	else if (l4_proto == TRACE_IPPROTO_TCP && rem >= sizeof(*tcp))
 		tcp = (libtrace_tcp_t *) l4;
 	else if (l4_proto == TRACE_IPPROTO_UDP && rem >= sizeof(*udp))
 		udp = (libtrace_udp_t *) l4;
@@ -166,6 +182,9 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 		le = (struct lfc_ext *) f->extension;
 		lf = &le->lf;
 
+		if (le->done)
+			goto skip;
+
 		/*
 		 * NOTE: we make our own notion of "packet direction", different than in the libflowmanager. In
 		 * libflowcalc, packet direction is 1 if it follows the same direction as the first packet in
@@ -188,21 +207,39 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	}
 
 	/*
+	 * time limit
+	 */
+	if (lfc->t > 0.0 && ts - lf->ts_first > lfc->t) {
+		flow_summarize(lfc, le);
+		goto skip;
+	}
+
+	/*
 	 * callbacks
 	 */
 	struct lfc_plugin *lp;
-	void *data;
+	void *ptr;
 
-	data = le->data;
+	ptr = le->data;
 	tlist_reset(lfc->plugins);
 	while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
 		if (lp->pktcb)
-			lp->pktcb(lfc, lp->pdata, lf, data, ts, up, is_new, pkt);
-		data += lp->datalen;
+			lp->pktcb(lfc, lp->pdata, lf, ptr, ts, up, is_new, pkt);
+		ptr += lp->datalen;
 	}
 
 	lf->ts_last = ts;
 
+	/*
+	 * packet limit
+	 */
+	if (trace_get_payload_length(pkt) > 0)
+		lf->n++;
+
+	if (lfc->n > 0 && lf->n == lfc->n)
+		flow_summarize(lfc, le);
+
+skip:
 	/*
 	 * flow maintenance
 	 */
@@ -232,7 +269,7 @@ void lfc_deinit(struct lfc *lfc)
 	mmatic_destroy(lfc->mm);
 }
 
-void lfc_enable(struct lfc *lfc, enum lfc_option option)
+void lfc_enable(struct lfc *lfc, enum lfc_option option, void *val)
 {
 	int one = 1;
 
@@ -243,6 +280,12 @@ void lfc_enable(struct lfc *lfc, enum lfc_option option)
 			break;
 		case LFC_OPT_TCP_WAIT:
 			lfm_set_config_option(LFM_CONFIG_TCP_TIMEWAIT, &one);
+			break;
+		case LFC_OPT_PACKET_LIMIT:
+			lfc->n = *((int *) val);
+			break;
+		case LFC_OPT_TIME_LIMIT:
+			lfc->t = *((double *) val);
 			break;
 	}
 }

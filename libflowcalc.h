@@ -45,6 +45,9 @@ struct lfc {
 	tlist *plugins;       /**> list of struct lfc_plugin */
 	int datalen_sum;      /**> sum of plugins->datalen */
 	unsigned int last_id; /**> last assigned lfc_flow::id */
+
+	unsigned long n;      /**> flow packet limit */
+	double t;             /**> flow time limit */
 };
 
 /** Represents attached plugin */
@@ -62,6 +65,7 @@ struct lfc_flow {
 	unsigned int id;               /**> flow id - sequential number */
 	double ts_first;               /**> first packet timestamp */
 	double ts_last;                /**> last packet timestamp */
+	unsigned long n;               /**> number of packets with payload */
 
 	bool is_ip6;                   /**> is IPv6? */
 	uint16_t proto;                /**> transport protocol */
@@ -79,6 +83,7 @@ struct lfc_flow {
 /** Represents libflowmanager extension data */
 struct lfc_ext {
 	struct lfc_flow lf;            /**> basic flow information */
+	bool done;                     /**> true if flow already summarized */
 	void *data;                    /**> plugin data */
 };
 
@@ -90,6 +95,8 @@ struct lfc_ext {
 enum lfc_option {
 	LFC_OPT_TCP_ANYSTART = 1,           /**> LFM_CONFIG_TCP_ANYSTART */
 	LFC_OPT_TCP_WAIT,                   /**> LFM_CONFIG_TCP_TIMEWAIT */
+	LFC_OPT_PACKET_LIMIT,               /**> flow packet limit (val is unsigned long) */
+	LFC_OPT_TIME_LIMIT,                 /**> flow time limit (val is double) */
 };
 
 /****************************************************************************/
@@ -100,8 +107,11 @@ struct lfc *lfc_init();
 /** Deinitialize libflowcalc */
 void lfc_deinit(struct lfc *lfc);
 
-/** Enable given libflowcalc option */
-void lfc_enable(struct lfc *lfc, enum lfc_option option);
+/** Enable given libflowcalc option
+ * @param option     option number (see enum lfc_option)
+ * @param val        address to option value (optional)
+ */
+void lfc_enable(struct lfc *lfc, enum lfc_option option, void *val);
 
 /** Register a plugin
  * @param name     plugin name
