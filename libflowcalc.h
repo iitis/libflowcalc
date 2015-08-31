@@ -1,3 +1,25 @@
+/*
+ * libflowcalc: library for calculating IP flow features
+ * Copyright (C) 2012-2013 IITiS PAN Gliwice <http://www.iitis.pl/>
+ * Copyright (C) 2015 Akamai Technologies, Inc. <http://www.akamai.com/>
+ *
+ * Author: Paweł Foremski <pjf@foremski.pl>
+ * Inspired by lpi_protoident.cc by Shane Alcock, et al.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef _LIBFLOWCALC_H_
 #define _LIBFLOWCALC_H_
 
@@ -48,6 +70,8 @@ struct lfc {
 
 	unsigned long n;      /**> flow packet limit */
 	double t;             /**> flow time limit */
+	bool noloss;          /**> no flows with TCP packet loss? */
+	bool reqclose;        /**> require clean TCP finish? */
 };
 
 /** Represents attached plugin */
@@ -59,6 +83,22 @@ struct lfc_plugin {
 	flow_cb flowcb;      /**> flow callback function */
 	void *pdata;         /**> plugin data */
 };
+
+
+/** Flow TCP sequence number tracking */
+struct lfc_flow_tcp {
+	uint32_t next_seq;         /**> expected seq on next packet */
+	double lost_ts;            /**> timestamp of last loss */
+	tlist *lost_list;          /**> list of lfc_lost */
+};
+
+/** Info on lost TCP segment */
+struct lfc_tcplost {
+	uint32_t from;             /**> from which seq? */
+	uint32_t to;               /**> to which seq? */
+	double ts;                 /**> timestamp of last update on this range */
+};
+
 
 /** Flow data */
 struct lfc_flow {
@@ -78,6 +118,9 @@ struct lfc_flow {
 		uint16_t port;             /**> transport protocol port number */
 	} src;                         /**> source address */
 	struct lfc_flow_addr dst;      /**> destination address */
+
+	struct lfc_flow_tcp tcp_up;   /**> TCP seq numbers: upload */
+	struct lfc_flow_tcp tcp_down; /**> TCP seq numbers: download */
 };
 
 /** Represents libflowmanager extension data */
@@ -97,6 +140,8 @@ enum lfc_option {
 	LFC_OPT_TCP_WAIT,                   /**> LFM_CONFIG_TCP_TIMEWAIT */
 	LFC_OPT_PACKET_LIMIT,               /**> flow packet limit (val is unsigned long) */
 	LFC_OPT_TIME_LIMIT,                 /**> flow time limit (val is double) */
+	LFC_OPT_TCP_NOLOSS,                 /**> skip TCP flows with packet loss */
+	LFC_OPT_TCP_REQCLOSE,               /**> skip TCP flows that didnt close via (HALF)CLOSE or RST */
 };
 
 /****************************************************************************/

@@ -1,16 +1,29 @@
 /*
- * libflowcalc - library for calculating IP flows out of PCAP files
- * Copyright (c) 2012 IITiS PAN Gliwice <http://www.iitis.pl/>
- * Author: Paweł Foremski
+ * libflowcalc: library for calculating IP flow features
+ * Copyright (C) 2012-2013 IITiS PAN Gliwice <http://www.iitis.pl/>
+ * Copyright (C) 2015 Akamai Technologies, Inc. <http://www.akamai.com/>
  *
- * Licensed under GNU GPL v. 3
- *
+ * Author: Paweł Foremski <pjf@foremski.pl>
  * Inspired by lpi_protoident.cc by Shane Alcock, et al.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * FIXME: handle the TCP_ANYSTART option better (@1): the case in which
  *        is_new==1 for a TCP connection started by any packet is not
  *        the same as the one started by the proper SYN/SYN+ACK/ACK triplet
  *        e.g. the classification by first 5 packets would need this
+ * FIXME: add flow_cleanup() callback, because flow_cb() can be skipped
  */
 
 #include <stdio.h>
@@ -23,16 +36,38 @@
 
 #include "libflowcalc.h"
 
-static void flow_summarize(struct lfc *lfc, struct lfc_ext *le)
+static void flow_summarize(struct lfc *lfc, Flow *flow)
 {
+	struct lfc_ext *le;
 	struct lfc_plugin *lp;
 	void *ptr;
 
-	if (le->done) return;
+	le = (struct lfc_ext *) flow->extension;
+	if (!le || le->done) return;
+
+	/* skip TCP flows that didnt shutdown properly */
+	if (lfc->reqclose && le->lf.proto == TRACE_IPPROTO_TCP) {
+		switch (flow->flow_state) {
+			case FLOW_STATE_CLOSE:
+			case FLOW_STATE_RESET:
+			case FLOW_STATE_HALFCLOSE:
+				break;
+			default:
+				le->done = true;
+				return;
+			}
+	}
+
+	/* skip TCP flows with unrecovered packet losses */
+	if (lfc->noloss && le->lf.proto == TRACE_IPPROTO_TCP) {
+		if (le->lf.tcp_up.lost_ts > 0 || le->lf.tcp_down.lost_ts > 0) {
+			le->done = true;
+			return;
+		}
+	}
 
 	ptr = le->data;
 	tlist_reset(lfc->plugins);
-
 	while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
 		if (lp->flowcb)
 			lp->flowcb(lfc, lp->pdata, &le->lf, ptr);
@@ -43,6 +78,18 @@ static void flow_summarize(struct lfc *lfc, struct lfc_ext *le)
 	le->done = true;
 }
 
+static void free_tcp(struct lfc_flow_tcp *ftcp)
+{
+	struct lfc_tcplost *tl;
+
+	if (ftcp->lost_list) {
+		tlist_reset(ftcp->lost_list);
+		while ((tl = (struct lfc_tcplost *) tlist_iter(ftcp->lost_list)))
+			mmatic_free(tl);
+		tlist_free(ftcp->lost_list);
+	}
+}
+
 static void expire_flows(struct lfc *lfc, double ts, bool force)
 {
 	Flow *flow;
@@ -51,8 +98,10 @@ static void expire_flows(struct lfc *lfc, double ts, bool force)
 	while ((flow = lfm_expire_next_flow(ts, force)) != NULL) {
 		le = (struct lfc_ext *) flow->extension;
 
-		flow_summarize(lfc, le);
+		flow_summarize(lfc, flow);
 
+		free_tcp(&(le->lf.tcp_up));
+		free_tcp(&(le->lf.tcp_down));
 		if (lfc->datalen_sum)
 			mmatic_free(le->data);
 		mmatic_free(le);
@@ -139,20 +188,20 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	 * get flow data @1
 	 */
 	bool is_new = false;
-	Flow *f;
+	Flow *flow;
 	struct lfc_ext *le;
 	struct lfc_flow *lf;
 	bool up;
 
-	f = lfm_match_packet_to_flow(pkt, dir, &is_new);
-	if (!f)
+	flow = lfm_match_packet_to_flow(pkt, dir, &is_new);
+	if (!flow)
 		return;
 
 	if (is_new) {
 		le = (struct lfc_ext *) mmatic_zalloc(lfc->mm, sizeof(*le));
 		if (lfc->datalen_sum)
 			le->data = mmatic_zalloc(lfc->mm, lfc->datalen_sum);
-		f->extension = le;
+		flow->extension = le;
 
 		/*
 		 * record information on first packet
@@ -179,7 +228,7 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 
 		up = true;
 	} else {
-		le = (struct lfc_ext *) f->extension;
+		le = (struct lfc_ext *) flow->extension;
 		lf = &le->lf;
 
 		if (le->done)
@@ -207,10 +256,121 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	}
 
 	/*
+	 * detect TCP packet loss
+	 */
+	uint32_t seq, len;
+	uint32_t from, to;
+	struct lfc_flow_tcp *ftcp;
+	struct lfc_tcplost *tl, *tl2;
+
+	if (lfc->noloss && tcp) {
+		seq = ntohl(tcp->seq);
+		len = trace_get_payload_length(pkt);
+		from = seq;
+		to = len > 0 ? seq + len - 1 : 0; /* dont use if len is 0 */
+		ftcp = up ? &(lf->tcp_up) : &(lf->tcp_down);
+
+		dbg(5, "%u %u -> %u: seq %u len %u -> next %u\t",
+			up, lf->src.port, lf->dst.port, seq, len, seq+len);
+
+		/* special case: initial packets */
+		if (tcp->syn && ftcp->next_seq == 0) {
+			ftcp->next_seq = seq + 1;
+			dbg(5, "=INIT");
+		}
+
+		/* typical case: no loss */
+		else if (seq == ftcp->next_seq) {
+			ftcp->next_seq = seq + len;
+			dbg(5, "=OK");
+		}
+
+		/* happens: segment lost (packet reorder?) */
+		else if (seq > ftcp->next_seq) {
+
+			/* collect data on lost segment */
+			tl = (struct lfc_tcplost *) mmatic_zalloc(lfc->mm, sizeof *tl);
+			tl->from = ftcp->next_seq;
+			tl->to   = seq - 1;
+			tl->ts   = ts;
+
+			/* push it to flow tcp info */
+			if (!ftcp->lost_list)
+				ftcp->lost_list = tlist_create(NULL, lfc->mm);
+			tlist_push(ftcp->lost_list, tl);
+			if (ftcp->lost_ts == 0)
+				ftcp->lost_ts = ts;
+
+			dbg(5, "=LOST from %u to %u (total %u)", ftcp->next_seq, seq - 1, tlist_count(ftcp->lost_list));
+
+			ftcp->next_seq = seq + len;
+		}
+
+		else if (len == 0) {
+			dbg(5, "=SKIP");
+		}
+
+		/* happens: retransmissions (dont use seq/len here) */
+		else if (seq < ftcp->next_seq) {
+			dbg(5, "=RETRANS");
+
+			/* look-up and delete from lost list */
+			tlist_reset(ftcp->lost_list);
+			while ((tl = (struct lfc_tcplost *) tlist_iter(ftcp->lost_list))) {
+				if (to < tl->from) break; // list sorted by tl->from
+				if (!((from >= tl->from && from <= tl->to)
+					||  (to >= tl->from &&   to <= tl->to))) continue;
+
+				/* segment retransmitted */
+				tlist_remove(ftcp->lost_list);
+
+				/* segment starts in middle */
+				if (from > tl->from) {
+					tl2 = (struct lfc_tcplost *) mmatic_zalloc(lfc->mm, sizeof *tl2);
+					tl2->from = tl->from;
+					tl2->to   = from - 1;
+					tl2->ts   = tl->ts;
+					tlist_insertbefore(ftcp->lost_list, tl2);
+				}
+
+				/* segment ends in middle */
+				if (to < tl->to) {
+					tl2 = (struct lfc_tcplost *) mmatic_zalloc(lfc->mm, sizeof *tl2);
+					tl2->from = to + 1;
+					tl2->to   = tl->to;
+					tl2->ts   = tl->ts;
+					tlist_insertbefore(ftcp->lost_list, tl2);
+				}
+				/* segments ends after */
+				else if (to > tl->to) {
+					from = tl->to + 1;
+				}
+
+				mmatic_free(tl);
+			}
+
+			dbg(5, " =RECOVERED from %u to %u", seq, to);
+
+			/* update lost_ts to first ts in tlist */
+			if (tlist_count(ftcp->lost_list) == 0) {
+				dbg(5, " =RECOVERING DONE", seq, to);
+				ftcp->lost_ts = 0;
+			} else {
+				dbg(5, " =STILL RECOVERING(%u)", tlist_count(ftcp->lost_list));
+				tlist_reset(ftcp->lost_list);
+				tl = (struct lfc_tcplost *) tlist_peek(ftcp->lost_list);
+				ftcp->lost_ts = tl->ts;
+			}
+		}
+
+		dbg(5, "\n");
+	}
+
+	/*
 	 * time limit
 	 */
 	if (lfc->t > 0.0 && ts - lf->ts_first > lfc->t) {
-		flow_summarize(lfc, le);
+		flow_summarize(lfc, flow);
 		goto skip;
 	}
 
@@ -237,15 +397,15 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 		lf->n++;
 
 	if (lfc->n > 0 && lf->n == lfc->n)
-		flow_summarize(lfc, le);
+		flow_summarize(lfc, flow);
 
 skip:
 	/*
 	 * flow maintenance
 	 */
 	if (tcp)
-		lfm_check_tcp_flags(f, tcp, dir, ts);
-	lfm_update_flow_expiry_timeout(f, ts);
+		lfm_check_tcp_flags(flow, tcp, dir, ts);
+	lfm_update_flow_expiry_timeout(flow, ts);
 }
 
 /**********************************/
@@ -286,6 +446,12 @@ void lfc_enable(struct lfc *lfc, enum lfc_option option, void *val)
 			break;
 		case LFC_OPT_TIME_LIMIT:
 			lfc->t = *((double *) val);
+			break;
+		case LFC_OPT_TCP_NOLOSS:
+			lfc->noloss = true;
+			break;
+		case LFC_OPT_TCP_REQCLOSE:
+			lfc->reqclose = true;
 			break;
 	}
 }

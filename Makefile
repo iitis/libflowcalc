@@ -1,4 +1,4 @@
-FLAGS += -g -Wall -pedantic -fPIC $(FLAGS_ADD)
+FLAGS += -g -Wall -fPIC $(FLAGS_ADD)
 CPPFLAGS += $(FLAGS) -std=gnu++0x $(CPPFLAGS_ADD)
 CFLAGS   += $(FLAGS) -std=gnu99 -Dinline='inline __attribute__ ((gnu_inline))' $(CFLAGS_ADD)
 
