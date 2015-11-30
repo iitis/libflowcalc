@@ -21,25 +21,21 @@ struct flow {
 	int bytes_down;
 };
 
-void pkt(struct lfc *lfc, void *pdata,
-	struct lfc_flow *lf, void *data,
-	double ts, bool up, bool is_new, libtrace_packet_t *pkt)
+void pkt(struct lfc *lfc, void *plugin,
+	struct lfc_flow *flow, struct lfc_pkt *pkt, void *data)
 {
 	struct flow *t = data;
-	int len;
 
-	len = trace_get_payload_length(pkt);
-
-	if (up) {
+	if (pkt->up) {
 		t->pkts_up++;
-		t->bytes_up += len;
+		t->bytes_up += pkt->psize;
 	} else {
 		t->pkts_down++;
-		t->bytes_down += len;
+		t->bytes_down += pkt->psize;
 	}
 }
 
-void flow(struct lfc *lfc, void *pdata, struct lfc_flow *lf, void *data)
+void flow(struct lfc *lfc, void *plugin, struct lfc_flow *lf, void *data)
 {
 	struct flow *t = data;
 

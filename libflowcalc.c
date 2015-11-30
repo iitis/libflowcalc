@@ -1,6 +1,6 @@
 /*
  * libflowcalc: library for calculating IP flow features
- * Copyright (C) 2012-2013 IITiS PAN Gliwice <http://www.iitis.pl/>
+ * Copyright (C) 2012-2015 IITiS PAN Gliwice <http://www.iitis.pl/>
  * Copyright (C) 2015 Akamai Technologies, Inc. <http://www.akamai.com/>
  *
  * Author: Paweł Foremski <pjf@foremski.pl>
@@ -20,7 +20,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * FIXME: handle the TCP_ANYSTART option better (@1): the case in which
- *        is_new==1 for a TCP connection started by any packet is not
+ *        first==1 for a TCP connection started by any packet is not
  *        the same as the one started by the proper SYN/SYN+ACK/ACK triplet
  *        e.g. the classification by first 5 packets would need this
  * FIXME: add flow_cleanup() callback, because flow_cb() can be skipped
@@ -40,7 +40,6 @@ static void flow_summarize(struct lfc *lfc, Flow *flow)
 {
 	struct lfc_ext *le;
 	struct lfc_plugin *lp;
-	void *ptr;
 
 	le = (struct lfc_ext *) flow->extension;
 	if (!le || le->done) return;
@@ -66,13 +65,11 @@ static void flow_summarize(struct lfc *lfc, Flow *flow)
 		}
 	}
 
-	ptr = le->data;
+	uint8_t *bptr = (uint8_t *) le->data;
 	tlist_reset(lfc->plugins);
 	while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
-		if (lp->flowcb)
-			lp->flowcb(lfc, lp->pdata, &le->lf, ptr);
-
-		ptr += lp->datalen;
+		if (lp->flowcb) lp->flowcb(lfc, lp->plugin, &le->lf, bptr);
+		bptr += lp->datalen;
 	}
 
 	le->done = true;
@@ -92,147 +89,120 @@ static void free_tcp(struct lfc_flow_tcp *ftcp)
 
 static void expire_flows(struct lfc *lfc, double ts, bool force)
 {
-	Flow *flow;
+	Flow *ltflow;
 	struct lfc_ext *le;
 
-	while ((flow = lfm_expire_next_flow(ts, force)) != NULL) {
-		le = (struct lfc_ext *) flow->extension;
+	while ((ltflow = lfm_expire_next_flow(ts, force)) != NULL) {
+		le = (struct lfc_ext *) ltflow->extension;
 
-		flow_summarize(lfc, flow);
+		flow_summarize(lfc, ltflow);
 
 		free_tcp(&(le->lf.tcp_up));
 		free_tcp(&(le->lf.tcp_down));
 		if (lfc->datalen_sum)
 			mmatic_free(le->data);
 		mmatic_free(le);
-		delete(flow);
+		delete(ltflow);
 	}
 }
 
-static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
+static void per_packet(struct lfc *lfc, libtrace_packet_t *ltpkt)
 {
+	struct lfc_pkt pkt = {0};
+	struct lfc_flow *flow = NULL;
+	static double last_gc = 0.0;
+
 	/*
-	 * move the garbage collector forward
+	 * move the garbage collector forward?
 	 */
-	double ts;
-	ts = trace_get_seconds(pkt);
-	expire_flows(lfc, ts, false);
+	pkt.ts = trace_get_seconds(ltpkt);
+	if (pkt.ts - last_gc > 3.0) {
+		expire_flows(lfc, pkt.ts, false);
+		last_gc = pkt.ts;
+	}
 
 	/*
 	 * get network layer info
 	 */
-	void *l3;
 	uint16_t l3_proto;
+	void *ptr;
 	uint32_t rem;
-	libtrace_ip_t *ip4 = NULL;
-	libtrace_ip6_t *ip6 = NULL;
-	int dir;
 
 	/* skip non-IP */
-	l3 = trace_get_layer3(pkt, &l3_proto, &rem);
-	if (!l3)
-		return;
-	else if (l3_proto == TRACE_ETHERTYPE_IP && rem >= sizeof *ip4)
-		ip4 = (libtrace_ip_t *) l3;
-	else if (l3_proto == TRACE_ETHERTYPE_IPV6 && rem >= sizeof *ip6)
-		ip6 = (libtrace_ip6_t *) l3;
-	else
-		return;
+	ptr = trace_get_layer3(ltpkt, &l3_proto, &rem);
+	if (!ptr) return;
+	if (l3_proto == TRACE_ETHERTYPE_IP && rem >= sizeof *(pkt.ip4))
+		pkt.ip4 = (libtrace_ip_t *) ptr;
+	else if (l3_proto == TRACE_ETHERTYPE_IPV6 && rem >= sizeof *(pkt.ip6))
+		pkt.ip6 = (libtrace_ip6_t *) ptr;
+	else return;
 
 	/*
 	 * get transport layer info
 	 */
-	void *l4;
 	uint8_t l4_proto;
-	libtrace_tcp_t *tcp = NULL;
-	libtrace_udp_t *udp = NULL;
-	uint16_t src_port;
-	uint16_t dst_port;
 
 	/* skip non-TCP/UDP */
-	l4 = trace_get_transport(pkt, &l4_proto, &rem);
-	if (!l4)
-		return;
-	else if (l4_proto == TRACE_IPPROTO_TCP && rem >= sizeof(*tcp))
-		tcp = (libtrace_tcp_t *) l4;
-	else if (l4_proto == TRACE_IPPROTO_UDP && rem >= sizeof(*udp))
-		udp = (libtrace_udp_t *) l4;
-	else
-		return;
-
-	src_port = trace_get_source_port(pkt);
-	dst_port = trace_get_destination_port(pkt);
-
-	/*
-	 * get libflowmanager direction
-	 */
-	if (ip4)
-		dir = memcmp(&(ip4->ip_src), &(ip4->ip_dst), sizeof(ip4->ip_src));
-	else
-		dir = memcmp(&(ip6->ip_src), &(ip6->ip_dst), sizeof(ip6->ip_src));
-
-	if (dir < 0) {
-		dir = 0;
-	} else if (dir > 0) {
-		dir = 1;
-	} else {
-		if (src_port < dst_port)
-			dir = 0;
-		else if (src_port > dst_port)
-			dir = 1;
-		else
-			dir = 0;
-	}
+	ptr = trace_get_transport(ltpkt, &l4_proto, &rem);
+	if (!ptr) return;
+	if (l4_proto == TRACE_IPPROTO_TCP && rem >= sizeof *pkt.tcp) {
+		pkt.tcp = (libtrace_tcp_t *) ptr;
+		pkt.sport = ntohs(pkt.tcp->source);
+		pkt.dport = ntohs(pkt.tcp->dest);
+	} else if (l4_proto == TRACE_IPPROTO_UDP && rem >= sizeof *pkt.udp) {
+		pkt.udp = (libtrace_udp_t *) ptr;
+		pkt.sport = ntohs(pkt.udp->source);
+		pkt.dport = ntohs(pkt.udp->dest);
+	} else return;
 
 	/*
 	 * get flow data @1
 	 */
-	bool is_new = false;
-	Flow *flow;
+	Flow *ltflow;
 	struct lfc_ext *le;
-	struct lfc_flow *lf;
-	bool up;
 
-	flow = lfm_match_packet_to_flow(pkt, dir, &is_new);
-	if (!flow)
-		return;
+	/* get libflowmanager info */
+	int dir = 0;
+	if (pkt.ip4) dir = memcmp(&pkt.ip4->ip_src, &pkt.ip4->ip_dst, sizeof pkt.ip4->ip_src);
+	else         dir = memcmp(&pkt.ip6->ip_src, &pkt.ip6->ip_dst, sizeof pkt.ip6->ip_src);
+	if (dir > 0 || (dir == 0 && pkt.sport > pkt.dport)) dir = 1;
 
-	if (is_new) {
+	ltflow = lfm_match_packet_to_flow(ltpkt, dir, &pkt.first);
+	if (!ltflow) return;
+
+	/* record information on first packet? */
+	if (pkt.first) {
+		pkt.up = true;
+
 		le = (struct lfc_ext *) mmatic_zalloc(lfc->mm, sizeof(*le));
 		if (lfc->datalen_sum)
 			le->data = mmatic_zalloc(lfc->mm, lfc->datalen_sum);
-		flow->extension = le;
+		ltflow->extension = le;
 
-		/*
-		 * record information on first packet
-		 */
-		lf = &le->lf;
-		lf->id = ++lfc->last_id;
-		lf->ts_first = ts;
+		flow = &le->lf;
+		flow->id = ++lfc->last_id;
+		flow->ts_first = pkt.ts;
 
 		/* copy IP address */
-		if (ip6) {
-			lf->is_ip6 = true;
-			memcpy(&(lf->src.addr.ip6), &(ip6->ip_src), sizeof(ip6->ip_src));
-			memcpy(&(lf->dst.addr.ip6), &(ip6->ip_dst), sizeof(ip6->ip_dst));
+		if (pkt.ip6) {
+			flow->is_ip6 = true;
+			memcpy(&flow->src.addr.ip6, &pkt.ip6->ip_src, sizeof pkt.ip6->ip_src);
+			memcpy(&flow->dst.addr.ip6, &pkt.ip6->ip_dst, sizeof pkt.ip6->ip_dst);
 		} else {
-			lf->is_ip6 = false;
-			memcpy(&(lf->src.addr.ip4), &(ip4->ip_src), sizeof(ip4->ip_src));
-			memcpy(&(lf->dst.addr.ip4), &(ip4->ip_dst), sizeof(ip4->ip_dst));
+			flow->is_ip6 = false;
+			memcpy(&flow->src.addr.ip4, &pkt.ip4->ip_src, sizeof pkt.ip4->ip_src);
+			memcpy(&flow->dst.addr.ip4, &pkt.ip4->ip_dst, sizeof pkt.ip4->ip_dst);
 		}
 
 		/* transport protocol */
-		lf->proto = l4_proto;
-		lf->src.port = src_port;
-		lf->dst.port = dst_port;
-
-		up = true;
+		flow->proto = l4_proto;
+		flow->src.port = pkt.sport;
+		flow->dst.port = pkt.dport;
 	} else {
-		le = (struct lfc_ext *) flow->extension;
-		lf = &le->lf;
+		le = (struct lfc_ext *) ltflow->extension;
+		flow = &le->lf;
 
-		if (le->done)
-			goto skip;
+		if (le->done) goto skip;
 
 		/*
 		 * NOTE: we make our own notion of "packet direction", different than in the libflowmanager. In
@@ -242,39 +212,68 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 		 *
 		 * The code below gets packet direction as in libflowcalc
 		 */
-		if (ip6)
-			up = (memcmp(&(ip6->ip_src), &(lf->src.addr.ip6), sizeof(ip6->ip_src)) == 0);
+		if (pkt.ip6)
+			pkt.up = (memcmp(&(pkt.ip6->ip_src), &(flow->src.addr.ip6), sizeof(pkt.ip6->ip_src)) == 0);
 		else
-			up = (memcmp(&(ip4->ip_src), &(lf->src.addr.ip4), sizeof(ip4->ip_src)) == 0);
+			pkt.up = (memcmp(&(pkt.ip4->ip_src), &(flow->src.addr.ip4), sizeof(pkt.ip4->ip_src)) == 0);
 
-		if (up) {
-			if (tcp)
-				up = (ntohs(tcp->source) == lf->src.port);
-			else
-				up = (ntohs(udp->source) == lf->src.port);
+		if (pkt.up) {
+			if (pkt.tcp) pkt.up = (ntohs(pkt.tcp->source) == flow->src.port);
+			else         pkt.up = (ntohs(pkt.udp->source) == flow->src.port);
 		}
+	}
+
+	/*
+	 * record additional data
+	 */
+	flow->ts_last = pkt.ts;
+	pkt.ltpkt = ltpkt;
+	pkt.size  = trace_get_wire_length(ltpkt);
+	pkt.psize = trace_get_payload_length(ltpkt);
+
+	if (pkt.tcp) pkt.data = trace_get_payload_from_tcp(pkt.tcp, &rem);
+	else         pkt.data = trace_get_payload_from_udp(pkt.udp, &rem);
+	if (rem > 0) pkt.len = rem;
+	else         pkt.data = NULL;
+
+	/*
+	 * detect dupes @2
+	 */
+	if (pkt.ip4) {
+		pkt.id = htons(pkt.ip4->ip_id) << 16;
+		pkt.id |= htons(pkt.ip4->ip_off) & 0x1FFF;
+	} else { /* NB: work-around for IPv6 */
+		pkt.id = (pkt.tcp) ? pkt.tcp->seq : (uint32_t) pkt.udp->check;
+		pkt.id ^= pkt.ip6->plen << 16;
+	}
+
+	if (pkt.up) {
+		pkt.dup = (pkt.id == flow->last_id_up);
+		flow->last_id_up = pkt.id;
+	} else {
+		pkt.dup = (pkt.id == flow->last_id_down);
+		flow->last_id_down = pkt.id;
 	}
 
 	/*
 	 * detect TCP packet loss
 	 */
-	uint32_t seq, len;
-	uint32_t from, to;
+	uint32_t seq, len, from, to;
 	struct lfc_flow_tcp *ftcp;
 	struct lfc_tcplost *tl, *tl2;
 
-	if (lfc->noloss && tcp) {
-		seq = ntohl(tcp->seq);
-		len = trace_get_payload_length(pkt);
+	if (lfc->noloss && pkt.tcp) {
+		seq = ntohl(pkt.tcp->seq);
+		len = trace_get_payload_length(ltpkt);
 		from = seq;
 		to = len > 0 ? seq + len - 1 : 0; /* dont use if len is 0 */
-		ftcp = up ? &(lf->tcp_up) : &(lf->tcp_down);
+		ftcp = pkt.up ? &(flow->tcp_up) : &(flow->tcp_down);
 
 		dbg(5, "%u %u -> %u: seq %u len %u -> next %u\t",
-			up, lf->src.port, lf->dst.port, seq, len, seq+len);
+			pkt.up, flow->src.port, flow->dst.port, seq, len, seq+len);
 
 		/* special case: initial packets */
-		if (tcp->syn && ftcp->next_seq == 0) {
+		if (pkt.tcp->syn && ftcp->next_seq == 0) {
 			ftcp->next_seq = seq + 1;
 			dbg(5, "=INIT");
 		}
@@ -292,14 +291,14 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 			tl = (struct lfc_tcplost *) mmatic_zalloc(lfc->mm, sizeof *tl);
 			tl->from = ftcp->next_seq;
 			tl->to   = seq - 1;
-			tl->ts   = ts;
+			tl->ts   = pkt.ts;
 
 			/* push it to flow tcp info */
 			if (!ftcp->lost_list)
 				ftcp->lost_list = tlist_create(NULL, lfc->mm);
 			tlist_push(ftcp->lost_list, tl);
 			if (ftcp->lost_ts == 0)
-				ftcp->lost_ts = ts;
+				ftcp->lost_ts = pkt.ts;
 
 			dbg(5, "=LOST from %u to %u (total %u)", ftcp->next_seq, seq - 1, tlist_count(ftcp->lost_list));
 
@@ -367,45 +366,44 @@ static void per_packet(struct lfc *lfc, libtrace_packet_t *pkt)
 	}
 
 	/*
-	 * time limit
+	 * behind the time limit?
 	 */
-	if (lfc->t > 0.0 && ts - lf->ts_first > lfc->t) {
-		flow_summarize(lfc, flow);
+	if (lfc->t > 0.0 && pkt.ts - flow->ts_first > lfc->t) {
+		flow_summarize(lfc, ltflow);
 		goto skip;
 	}
 
 	/*
-	 * callbacks
+	 * run callbacks
 	 */
-	struct lfc_plugin *lp;
-	void *ptr;
+	{
+		uint8_t *bptr = (uint8_t *) le->data;
+		struct lfc_plugin *lp;
 
-	ptr = le->data;
-	tlist_reset(lfc->plugins);
-	while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
-		if (lp->pktcb)
-			lp->pktcb(lfc, lp->pdata, lf, ptr, ts, up, is_new, pkt);
-		ptr += lp->datalen;
+		tlist_reset(lfc->plugins);
+		while ((lp = (struct lfc_plugin *) tlist_iter(lfc->plugins))) {
+			if (lp->pktcb) lp->pktcb(lfc, lp->plugin, flow, &pkt, bptr);
+			bptr += lp->datalen;
+		}
 	}
 
-	lf->ts_last = ts;
 
 	/*
 	 * packet limit
 	 */
-	if (trace_get_payload_length(pkt) > 0)
-		lf->n++;
+	if (trace_get_payload_length(ltpkt) > 0)
+		flow->n++;
 
-	if (lfc->n > 0 && lf->n == lfc->n)
-		flow_summarize(lfc, flow);
+	if (lfc->n > 0 && flow->n == lfc->n)
+		flow_summarize(lfc, ltflow);
 
 skip:
 	/*
 	 * flow maintenance
 	 */
-	if (tcp)
-		lfm_check_tcp_flags(flow, tcp, dir, ts);
-	lfm_update_flow_expiry_timeout(flow, ts);
+	if (pkt.tcp)
+		lfm_check_tcp_flags(ltflow, pkt.tcp, dir, pkt.ts);
+	lfm_update_flow_expiry_timeout(ltflow, pkt.ts);
 }
 
 /**********************************/
@@ -457,7 +455,7 @@ void lfc_enable(struct lfc *lfc, enum lfc_option option, void *val)
 }
 
 void lfc_register(struct lfc *lfc,
-	const char *name, int datalen, pkt_cb pktcb, flow_cb flowcb, void *pdata)
+	const char *name, int datalen, pkt_cb pktcb, flow_cb flowcb, void *plugin)
 {
 	struct lfc_plugin *lp;
 
@@ -466,7 +464,7 @@ void lfc_register(struct lfc *lfc,
 	lp->datalen = datalen;
 	lp->pktcb = pktcb;
 	lp->flowcb = flowcb;
-	lp->pdata = pdata;
+	lp->plugin = plugin;
 
 	tlist_push(lfc->plugins, lp);
 	lfc->datalen_sum += datalen;
